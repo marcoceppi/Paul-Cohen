@@ -1,0 +1,47 @@
+#!/usr/bin/env php5
+<?php
+
+$lines = file('/opt/minecraft/server.log');
+$total_lines = count($lines);
+
+echo 'Processing server.log file with ' . $total_lines . ' lines' . PHP_EOL;
+
+if( !is_file('/opt/paul-cohen/last-count') )
+{
+	file_put_contents('/opt/paul-cohen/last-count', $total_lines . '|' . $lines[0]);
+	$line_count = $total_lines;
+	$first_line = $lines[0];
+}
+else
+{
+	list($line_count, $first_line) = explode('|', file_get_contents('/opt/paul-cohen/last-count'));
+}
+
+$start = ($first_line != $lines[0]) ? 0 : $line_count;
+
+echo 'Starting at line ' . $start . ' since I\'m smart enough to work efficiently.' . PHP_EOL;
+
+for( $i = $start; $i < $total_lines; $i++ )
+{
+	$line = $lines[$i];
+	
+	list($date, $time, $level, $data) = explode(' ', $line, 4);
+	$time = strtotime($date . ' ' . $time);
+	$level = str_replace(array('[',']'), '', $level);
+	
+	switch( $level )
+	{
+		case 'WARNING':
+			echo "Danger! at $time: $data";
+		break;
+		case 'INFO':
+			echo "No big deal at $time: $data";
+		break;
+		case 'ERROR':
+			echo "Uh-oh $time: $data";
+		break;
+		default:
+			echo "WHAT IS ($level)?";
+		break;
+	}
+}
