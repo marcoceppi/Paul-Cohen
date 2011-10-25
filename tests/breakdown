@@ -1,0 +1,147 @@
+#!/usr/bin/env php5
+<?php
+
+define('ROOT_DIR', dirname($_SERVER['PHP_SELF']));
+
+$lines = file('/opt/minecraft/server.log');
+$total_lines = count($lines);
+
+echo 'Processing server.log file with ' . $total_lines . ' lines' . PHP_EOL;
+
+if( !is_file(ROOT_DIR . '/last-count') )
+{
+	file_put_contents(ROOT_DIR . '/last-count', $total_lines . '|' . $lines[0]);
+	$line_count = $total_lines;
+	$first_line = $lines[0];
+	$start = 0;
+}
+else
+{
+	list($line_count, $first_line) = explode('|', file_get_contents(ROOT_DIR . '/last-count'));
+	$start = $line_count;
+}
+
+echo 'Starting at line ' . $start . ' since I\'m smart enough to work efficiently.' . PHP_EOL;
+
+//Figure out timeline
+list($date, $time, ) = explode(' ', $lines[0], 3);
+
+// Get the first recorded year, month, and day so we can start statistic collection
+// Hey, these are going in files instead of a database. Deal with it.
+$cur_epoch = strtotime($date . ' ' . $time);
+$cur_year = (INT)date('Y', $cur_epoch);
+$cur_month = date('M', $cur_epoch);
+
+echo "Looks like this Minecraft server started on $cur_year in the month of $cur_month" . PHP_EOL;
+
+// user 
+//   - months
+//       - month => hours
+//   - total => hours
+//   - tracker
+//       - status => in/out
+//       - datetime => epoch
+
+$users = array();
+
+// As much as I love the foreach loop, for is a better play here.
+for( $i = $start; $i < $total_lines; $i++ )
+{
+	// Isolate just this line.
+	$line = $lines[$i];
+	$previous_time = $time;
+	$reset = false;
+	while( substr($line, 0, 1) == "\t" || substr($line, 0, 4) == 'java' )
+	{
+		$i++;
+		$line = $lines[$i];
+	}
+	
+	// Extrapolate, or whatever, the various data points from the line
+	list($date, $time, $level, $data) = explode(' ', $line, 4);
+	$time = strtotime($date . ' ' . $time);
+	$month = date('M', $time);
+	$level = str_replace(array('[',']'), '', $level);
+	
+	// Determine what to do based on the level thrown
+	switch( $level )
+	{
+		case 'WARNING':
+		break;
+		case 'INFO':
+			list($username, $data) = explode(" ", $data, 2);
+			$username = str_replace('/', '<', $username);
+
+			if( strpos($username, '<') === FALSE )
+			{
+				// User logged in. Record time.
+				if( strpos($data, 'logged in') !== FALSE )
+				{
+					if( !array_key_exists($username, $users) )
+					{
+						// Avoid stupid php warnings about "not exisiting"
+						$users[$username] = array('months' => array(), 'total' => 0, 'tracker' => array());
+						$users[$username]['months'][$month] = 0;
+					}
+
+					$users[$username]['tracker']['status'] = $time;
+				}
+				else
+				{
+					if( strpos($data, 'lost connection') !== FALSE )
+					{
+						//list( , $reason) = explode(': ', $data, 2);
+
+						// Do something special, user logged out. Update hours
+						$last_login = $users[$username]['tracker']['status'];
+						if( $last_login > 0 )
+						{
+						
+							$seconds_on = $time - $last_login;
+							if( !array_key_exists($month, $users[$username]['months']) )
+							{
+								$users[$username]['months'][$month] = 0;
+							}
+
+							$users[$username]['months'][$month] += $seconds_on;
+							$users[$username]['tracker']['status'] = 0;
+							$users[$username]['total'] += $seconds_on;
+						}
+					}
+				}
+			}
+		break;
+		case 'ERROR':
+			echo "Uh-oh $time: $data";
+		break;
+		case 'SEVERE':
+			$previous_time = $time;
+			// Every severe error results in there being a java.lang error. Skip that line!
+			$i++;
+		default:
+			// SOMETHING IS WRONG. RESET EVERYONE'S TIME.
+			foreach( $users as &$info )
+			{
+				$tracker = $info['tracker']['status'];
+				if( $tracker > 0 )
+				{
+					$time_on = $previous_time - $tracker;
+					$info['tracker']['status'] = 0;
+					$info['total'] += $time_on;
+					$info['months'][date('M', $previous_time)] += $time_on;
+				}
+			}
+		break;
+	}
+}
+
+// Probably should update the the starting point in last_count here
+
+foreach( $users as $user => $data )
+{
+	echo "$user has played a total of " . number_format(round($data['total'] / 60 / 60, 2), 2) . " hours on the server." . PHP_EOL;
+	foreach( $data['months'] as $month => $total )
+	{
+		echo "\t$month: " . number_format(round($total / 60, 2), 2) . ' minutes' . PHP_EOL;
+	}
+}
